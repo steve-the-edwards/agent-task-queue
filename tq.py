@@ -21,6 +21,8 @@ from pathlib import Path
 # Import shared queue infrastructure
 from queue_core import (
     QueuePaths,
+    TaskOrigin,
+    collect_task_origin,
     get_db,
     init_db,
     ensure_db,
@@ -297,13 +299,33 @@ def cleanup_queue(
         conn.commit()
 
 
-def register_task(conn, queue_name: str, paths: QueuePaths, command: str = None) -> int:
+def register_task(
+    conn,
+    queue_name: str,
+    paths: QueuePaths,
+    command: str = None,
+    task_origin: TaskOrigin | None = None,
+) -> int:
     """Register a task in the queue. Returns task_id immediately."""
     my_pid = os.getpid()
 
     cursor = conn.execute(
-        "INSERT INTO queue (queue_name, status, pid, server_id, command) VALUES (?, ?, ?, ?, ?)",
-        (queue_name, "waiting", my_pid, CLI_INSTANCE_ID, command),
+        """INSERT INTO queue (
+               queue_name, status, pid, server_id, command,
+               working_directory, worktree_root, repo_name, git_branch, agent_name
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            queue_name,
+            "waiting",
+            my_pid,
+            CLI_INSTANCE_ID,
+            command,
+            task_origin.working_directory if task_origin else None,
+            task_origin.worktree_root if task_origin else None,
+            task_origin.repo_name if task_origin else None,
+            task_origin.git_branch if task_origin else None,
+            task_origin.agent_name if task_origin else None,
+        ),
     )
     conn.commit()
     task_id = cursor.lastrowid
@@ -383,6 +405,8 @@ def cmd_run(args):
         print(f"Error: Working directory does not exist: {working_dir}", file=sys.stderr)
         sys.exit(1)
 
+    task_origin = collect_task_origin(working_dir, "tq")
+
     paths = get_paths(args)
     paths.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -441,7 +465,7 @@ def cmd_run(args):
         cleanup_queue(conn, queue_name, paths, queue_capacities)
 
         # Register task first so task_id is available for cleanup if interrupted
-        task_id = register_task(conn, queue_name, paths, command=command)
+        task_id = register_task(conn, queue_name, paths, command=command, task_origin=task_origin)
         wait_for_turn(conn, queue_name, task_id, paths, queue_capacities)
 
         print(f"[tq] Running: {command}")

@@ -34,6 +34,11 @@ object TaskQueueDatabase {
                                 queueName = rs.getString("queue_name"),
                                 status = rs.getString("status"),
                                 command = rs.getString("command"),
+                                workingDirectory = rs.getOptionalString("working_directory"),
+                                worktreeRoot = rs.getOptionalString("worktree_root"),
+                                repoName = rs.getOptionalString("repo_name"),
+                                gitBranch = rs.getOptionalString("git_branch"),
+                                agentName = rs.getOptionalString("agent_name"),
                                 pid = rs.getNullableInt("pid"),
                                 childPid = rs.getNullableInt("child_pid"),
                                 createdAt = rs.getString("created_at"),
@@ -66,4 +71,8 @@ private fun ResultSet.getNullableInt(columnName: String): Int? {
         is Number -> value.toInt()
         else -> value.toString().toIntOrNull()
     }
+}
+
+private fun ResultSet.getOptionalString(columnName: String): String? {
+    return runCatching { getString(columnName) }.getOrNull()
 }

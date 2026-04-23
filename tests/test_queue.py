@@ -104,6 +104,48 @@ async def test_single_task_execution(client):
 
 
 @pytest.mark.asyncio
+async def test_run_task_persists_origin_metadata(client):
+    """Test that repo/worktree/branch and agent metadata are stored for running tasks."""
+    repo_dir = str(Path(__file__).resolve().parents[1])
+    expected_origin = queue_core.collect_task_origin(repo_dir, "amp")
+
+    async with client:
+        result_task = asyncio.create_task(
+            client.call_tool(
+                "run_task",
+                {
+                    "command": "sleep 1",
+                    "working_directory": repo_dir,
+                    "queue_name": "metadata_test",
+                    "agent_name": "amp",
+                },
+            )
+        )
+
+        try:
+            await asyncio.sleep(0.2)
+
+            with get_db() as conn:
+                row = conn.execute(
+                    """SELECT working_directory, worktree_root, repo_name, git_branch, agent_name
+                       FROM queue
+                       WHERE queue_name = ? AND status = 'running'""",
+                    ("metadata_test",),
+                ).fetchone()
+
+            assert row is not None
+            assert row["working_directory"] == expected_origin.working_directory
+            assert row["worktree_root"] == expected_origin.worktree_root
+            assert row["repo_name"] == expected_origin.repo_name
+            assert row["git_branch"] == expected_origin.git_branch
+            assert row["agent_name"] == "amp"
+        finally:
+            result = await result_task
+
+        assert "SUCCESS" in str(result)
+
+
+@pytest.mark.asyncio
 async def test_invalid_working_directory(client):
     """Test that invalid working directory returns error."""
     async with client:

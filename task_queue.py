@@ -28,6 +28,8 @@ from mcp.types import TextContent
 # Import shared queue infrastructure
 from queue_core import (
     QueuePaths,
+    TaskOrigin,
+    collect_task_origin,
     get_db as _get_db,
     init_db as _init_db,
     ensure_db as _ensure_db,
@@ -269,7 +271,11 @@ def get_memory_mb() -> float:
 
 
 # --- Core Queue Logic ---
-async def wait_for_turn(queue_name: str, command: str | None = None) -> int:
+async def wait_for_turn(
+    queue_name: str,
+    command: str | None = None,
+    task_origin: TaskOrigin | None = None,
+) -> int:
     """Register task, wait for turn, return task ID when acquired."""
     queue_name = normalize_queue_name(queue_name)
 
@@ -290,8 +296,22 @@ async def wait_for_turn(queue_name: str, command: str | None = None) -> int:
 
     with get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO queue (queue_name, status, pid, server_id, command) VALUES (?, ?, ?, ?, ?)",
-            (queue_name, "waiting", my_pid, SERVER_INSTANCE_ID, command),
+            """INSERT INTO queue (
+                   queue_name, status, pid, server_id, command,
+                   working_directory, worktree_root, repo_name, git_branch, agent_name
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                queue_name,
+                "waiting",
+                my_pid,
+                SERVER_INSTANCE_ID,
+                command,
+                task_origin.working_directory if task_origin else None,
+                task_origin.worktree_root if task_origin else None,
+                task_origin.repo_name if task_origin else None,
+                task_origin.git_branch if task_origin else None,
+                task_origin.agent_name if task_origin else None,
+            ),
         )
         task_id = cursor.lastrowid
 
@@ -406,6 +426,7 @@ async def run_task(
     queue_name: str = "global",
     timeout_seconds: int = 1200,
     env_vars: str = "",
+    agent_name: str = "",
 ):
     """
     Execute a command through the task queue for sequential processing.
@@ -458,6 +479,7 @@ async def run_task(
         timeout_seconds: Max **execution** time before killing the task (default: 1200 = 20 mins).
             Queue wait time does NOT count against this timeout.
         env_vars: Environment variables to set, format: "KEY1=value1,KEY2=value2"
+        agent_name: Optional friendly caller label (for example `amp` or `claude-code`).
 
     Returns:
         Command output including stdout, stderr, and exit code.
@@ -481,7 +503,16 @@ async def run_task(
                 key, value = pair.split("=", 1)
                 env[key.strip()] = value.strip()
 
-    task_id = await wait_for_turn(queue_name, command)
+    ctx = None
+    try:
+        ctx = get_context()
+    except LookupError:
+        pass
+
+    caller_name = agent_name.strip() or (ctx.client_id if ctx and ctx.client_id else None)
+    task_origin = collect_task_origin(working_directory, caller_name)
+
+    task_id = await wait_for_turn(queue_name, command, task_origin=task_origin)
     mem_before = get_memory_mb()
 
     start = time.time()

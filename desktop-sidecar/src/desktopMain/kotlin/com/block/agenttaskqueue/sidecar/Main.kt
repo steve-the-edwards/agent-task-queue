@@ -49,11 +49,13 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.time.Instant
 import kotlin.system.exitProcess
 
 private const val ACTIVE_INTERVAL_MS = 1000L
@@ -99,6 +101,7 @@ fun main(args: Array<String>) = application {
 @Composable
 private fun QueueDashboard(dataDir: Path) {
     val refreshRequests = remember(dataDir) { Channel<Unit>(Channel.CONFLATED) }
+    val runningNow = rememberTickingInstant()
     var snapshot by remember(dataDir) {
         mutableStateOf(QueueSnapshot.empty(dataDir, statusMessage = "Loading queue state..."))
     }
@@ -164,7 +167,7 @@ private fun QueueDashboard(dataDir: Path) {
             snapshot.errorMessage?.let { ErrorBanner(it) }
             snapshot.statusMessage?.let { InfoBanner(it) }
 
-            RunningNowStrip(snapshot.runningTasks)
+            RunningNowStrip(snapshot.runningTasks, runningNow)
             QueueTopologySection(snapshot.scopeGroups)
 
             Text(
@@ -256,7 +259,7 @@ private fun SummaryCard(
 }
 
 @Composable
-private fun RunningNowStrip(tasks: List<QueueTask>) {
+private fun RunningNowStrip(tasks: List<QueueTask>, now: Instant) {
     SectionCard(
         title = "Running Now",
         subtitle = "Commands currently holding observed queue slots, with queue name and live elapsed time preserved.",
@@ -273,14 +276,14 @@ private fun RunningNowStrip(tasks: List<QueueTask>) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             tasks.forEach { task ->
-                RunningTaskSpotlight(task)
+                RunningTaskSpotlight(task, now)
             }
         }
     }
 }
 
 @Composable
-private fun RunningTaskSpotlight(task: QueueTask) {
+private fun RunningTaskSpotlight(task: QueueTask, now: Instant) {
     val accent = RunningAccent
 
     Surface(
@@ -303,7 +306,7 @@ private fun RunningTaskSpotlight(task: QueueTask) {
             ) {
                 StatusBadge(task.status, accent)
                 Text(
-                    task.statusAge(),
+                    task.statusAge(now),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                 )
@@ -315,6 +318,15 @@ private fun RunningTaskSpotlight(task: QueueTask) {
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+                task.displayRepoAndWorktree?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f),
+                    )
+                }
+                RunningTaskContextRow(task)
                 Text(
                     text = task.displayCommand,
                     style = MaterialTheme.typography.bodyLarge,
@@ -327,6 +339,32 @@ private fun RunningTaskSpotlight(task: QueueTask) {
                 text = taskMetaLine(task),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.64f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RunningTaskContextRow(task: QueueTask) {
+    val branch = task.displayBranch
+    val agent = task.displayAgent
+    if (branch == null && agent == null) {
+        return
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        branch?.let {
+            MetadataPill(
+                text = "branch $it",
+                background = Color(0xFFE2D0BC),
+                foreground = Color(0xFF5C4630),
+            )
+        }
+        agent?.let {
+            MetadataPill(
+                text = "agent $it",
+                background = Color(0xFFD3E6F2),
+                foreground = Color(0xFF1C5F87),
             )
         }
     }
@@ -657,6 +695,25 @@ private fun DefinitionTooltip(definition: String, content: @Composable () -> Uni
 }
 
 @Composable
+private fun MetadataPill(text: String, background: Color, foreground: Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(background)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Text(
+            text = text,
+            color = foreground,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun SectionCard(
     title: String,
     subtitle: String,
@@ -721,6 +778,20 @@ private fun taskMetaLine(task: QueueTask): String {
             append(" · child pid $it")
         }
     }
+}
+
+@Composable
+private fun rememberTickingInstant(): Instant {
+    var now by remember { mutableStateOf(Instant.now()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            now = Instant.now()
+        }
+    }
+
+    return now
 }
 
 private fun resolveDataDir(args: Array<String>): Path {

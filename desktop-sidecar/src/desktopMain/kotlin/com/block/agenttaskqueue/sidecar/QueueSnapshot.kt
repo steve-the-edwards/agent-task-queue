@@ -12,6 +12,11 @@ data class QueueTask(
     val queueName: String,
     val status: String,
     val command: String?,
+    val workingDirectory: String?,
+    val worktreeRoot: String?,
+    val repoName: String?,
+    val gitBranch: String?,
+    val agentName: String?,
     val pid: Int?,
     val childPid: Int?,
     val createdAt: String?,
@@ -19,6 +24,27 @@ data class QueueTask(
 ) {
     val displayCommand: String
         get() = (command ?: "unknown").replace(Regex("^(\\w+=\\S+\\s+)+"), "")
+
+    val displayRepoAndWorktree: String?
+        get() {
+            val repo = repoName?.takeIf { it.isNotBlank() }
+            val worktree = worktreeRoot?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: workingDirectory?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            val cwdSuffix = relativeDirectory(worktreeRoot, workingDirectory)
+
+            val parts = buildList {
+                repo?.let(::add)
+                worktree?.takeUnless { it == repo }?.let(::add)
+                cwdSuffix?.let(::add)
+            }
+            return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+        }
+
+    val displayBranch: String?
+        get() = gitBranch?.takeIf { it.isNotBlank() }
+
+    val displayAgent: String?
+        get() = agentName?.takeIf { it.isNotBlank() }
 
     fun statusAge(now: Instant = Instant.now()): String {
         val reference = when (status.lowercase()) {
@@ -132,6 +158,15 @@ fun formatRefreshTime(instant: Instant): String {
 }
 
 private fun rootScope(queueName: String): String = queueName.substringBefore('/')
+
+private fun relativeDirectory(root: String?, path: String?): String? {
+    if (root.isNullOrBlank() || path.isNullOrBlank()) {
+        return null
+    }
+
+    val prefix = if (root.endsWith('/')) root else "$root/"
+    return path.removePrefix(prefix).takeIf { it != path && it.isNotBlank() }
+}
 
 private val queueLaneComparator =
     compareByDescending<QueueLane> { it.runningCount > 0 }
