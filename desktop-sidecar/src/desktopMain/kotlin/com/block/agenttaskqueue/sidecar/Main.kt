@@ -21,7 +21,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -148,26 +147,12 @@ private fun QueueDashboard(dataDir: Path) {
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             SummaryRow(snapshot)
-            ScopeOverview(snapshot.scopeGroups)
 
             snapshot.errorMessage?.let { ErrorBanner(it) }
             snapshot.statusMessage?.let { InfoBanner(it) }
 
-            TaskSection(
-                title = "Running Now",
-                subtitle = "Tasks currently holding queue slots.",
-                tasks = snapshot.runningTasks,
-                emptyLabel = "No running tasks.",
-            )
-
-            TaskSection(
-                title = "Queued / Waiting",
-                subtitle = "Tasks blocked behind older work in their exact queue.",
-                tasks = snapshot.waitingTasks,
-                emptyLabel = "No waiting tasks.",
-            )
-
-            ScopeDetails(snapshot.scopeGroups)
+            RunningNowStrip(snapshot.runningTasks)
+            QueueTopologySection(snapshot.scopeGroups)
 
             Text(
                 text = "Live view from queue.db. Queue capacities set with --queue-capacity are process-local and not persisted in SQLite.",
@@ -252,70 +237,87 @@ private fun SummaryCard(
 }
 
 @Composable
-private fun ScopeOverview(scopeGroups: List<ScopeGroup>) {
-    if (scopeGroups.isEmpty()) {
-        return
-    }
+private fun RunningNowStrip(tasks: List<QueueTask>) {
+    SectionCard(
+        title = "Running Now",
+        subtitle = "Commands currently holding observed queue slots, with queue name and live elapsed time preserved.",
+    ) {
+        if (tasks.isEmpty()) {
+            Text("No running tasks.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
+            return@SectionCard
+        }
 
-    SectionCard(title = "Scope Activity", subtitle = "Each card rolls up descendant exact queues under a shared root scope.") {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            scopeGroups.forEach { scope ->
-                Card(
-                    modifier = Modifier.widthIn(min = 220.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F0E4)),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(scope.scopeName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = "${scope.runningCount} running · ${scope.waitingCount} waiting",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = "${scope.lanes.size} exact queues · ${scope.taskCount} total tasks",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TaskSection(
-    title: String,
-    subtitle: String,
-    tasks: List<QueueTask>,
-    emptyLabel: String,
-) {
-    SectionCard(title = title, subtitle = subtitle) {
-        if (tasks.isEmpty()) {
-            Text(emptyLabel, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
-            return@SectionCard
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             tasks.forEach { task ->
-                TaskRow(task = task, showQueue = true)
+                RunningTaskSpotlight(task)
             }
         }
     }
 }
 
 @Composable
-private fun ScopeDetails(scopeGroups: List<ScopeGroup>) {
+private fun RunningTaskSpotlight(task: QueueTask) {
+    val accent = Color(0xFFD06A3A)
+
+    Surface(
+        modifier = Modifier.widthIn(min = 320.dp, max = 380.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFFFFF5EC),
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, accent.copy(alpha = 0.2f), RoundedCornerShape(22.dp))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusBadge(task.status, accent)
+                Text(
+                    task.statusAge(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = task.queueName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = task.displayCommand,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Text(
+                text = taskMetaLine(task),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.64f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueTopologySection(scopeGroups: List<ScopeGroup>) {
     SectionCard(
-        title = "Queues By Scope",
-        subtitle = "Exact queues stay FIFO; grouping them here makes hierarchical queue families easier to scan.",
+        title = "Queue Topology",
+        subtitle = "Each scope groups exact queues. Every row stays FIFO: observed running work appears first, queued work follows in order.",
     ) {
         if (scopeGroups.isEmpty()) {
             Text("No active queues.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
@@ -323,12 +325,66 @@ private fun ScopeDetails(scopeGroups: List<ScopeGroup>) {
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            TopologyLegend()
             scopeGroups.forEach { scope ->
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ScopeTopologyCard(scope)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopologyLegend() {
+    Surface(shape = RoundedCornerShape(18.dp), color = Color(0xFFF2E8DB)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LegendChip(text = "Root scope", background = Color(0xFFE2D2BE), foreground = Color(0xFF6C4F34))
+            LegendChip(text = "Exact queue", background = Color(0xFFDCE9DF), foreground = Color(0xFF2F5D41))
+            LegendChip(text = "Running", background = Color(0xFFF7D9C7), foreground = Color(0xFF9A4B23))
+            LegendChip(text = "Waiting (FIFO)", background = Color(0xFFD7E8F3), foreground = Color(0xFF295F7F))
+            Text(
+                text = "Scope -> exact queue -> observed task order",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScopeTopologyCard(scope: ScopeGroup) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F0E4))) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LegendChip(text = "Root scope", background = Color(0xFFE2D2BE), foreground = Color(0xFF6C4F34))
                     Text(scope.scopeName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    scope.lanes.forEach { lane ->
-                        QueueLaneCard(lane)
-                    }
+                }
+                Text(
+                    text = "${scope.lanes.size} exact queues · ${scope.runningCount} running · ${scope.waitingCount} waiting",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                scope.lanes.forEach { lane ->
+                    LanePipelineRow(scope.scopeName, lane)
                 }
             }
         }
@@ -336,29 +392,56 @@ private fun ScopeDetails(scopeGroups: List<ScopeGroup>) {
 }
 
 @Composable
-private fun QueueLaneCard(lane: QueueLane) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBF5))) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+private fun LanePipelineRow(scopeName: String, lane: QueueLane) {
+    val laneLabel = laneDisplayName(scopeName, lane.queueName)
+
+    Surface(shape = RoundedCornerShape(18.dp), color = Color(0xFFFFFCF8)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(min = 220.dp, max = 260.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(lane.queueName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                LegendChip(text = "Exact queue", background = Color(0xFFDCE9DF), foreground = Color(0xFF2F5D41))
+                Text(laneLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (laneLabel != lane.queueName) {
                     Text(
-                        text = "${lane.runningCount} running · ${lane.waitingCount} waiting · ${lane.tasks.size} task(s)",
+                        text = lane.queueName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     )
                 }
+
+                Text(
+                    text = "${lane.runningCount} running · ${lane.waitingCount} waiting · ${lane.tasks.size} task(s)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                lane.tasks.forEach { task ->
-                    TaskRow(task = task, showQueue = false)
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFFF4EBDD))
+                    .horizontalScroll(rememberScrollState())
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                lane.runningTasks.forEach { task ->
+                    RunningPipelineTaskCard(task)
+                }
+                if (lane.runningTasks.isNotEmpty() && lane.waitingTasks.isNotEmpty()) {
+                    QueueTransitionMarker()
+                }
+                lane.waitingTasks.forEachIndexed { index, task ->
+                    WaitingPipelineTaskCard(task, position = index + 1)
                 }
             }
         }
@@ -366,17 +449,13 @@ private fun QueueLaneCard(lane: QueueLane) {
 }
 
 @Composable
-private fun TaskRow(task: QueueTask, showQueue: Boolean) {
-    val accent = if (task.status.equals("running", ignoreCase = true)) {
-        Color(0xFFD06A3A)
-    } else {
-        Color(0xFF3D7EA6)
-    }
+private fun RunningPipelineTaskCard(task: QueueTask) {
+    val accent = Color(0xFFD06A3A)
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.widthIn(min = 250.dp, max = 320.dp),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = Color(0xFFFFF7EF),
         tonalElevation = 1.dp,
     ) {
         Column(
@@ -391,17 +470,7 @@ private fun TaskRow(task: QueueTask, showQueue: Boolean) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusBadge(task.status, accent)
-                    Text("#${task.id}", fontWeight = FontWeight.Medium)
-                    if (showQueue) {
-                        Text(
-                            task.queueName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        )
-                    }
-                }
+                StatusBadge(task.status, accent)
                 Text(
                     task.statusAge(),
                     style = MaterialTheme.typography.bodySmall,
@@ -416,35 +485,97 @@ private fun TaskRow(task: QueueTask, showQueue: Boolean) {
                 overflow = TextOverflow.Ellipsis,
             )
 
-            val processLine = buildString {
-                task.pid?.let { append("server pid $it") }
-                task.childPid?.let {
-                    if (isNotEmpty()) append(" · ")
-                    append("child pid $it")
-                }
-            }
-            if (processLine.isNotEmpty()) {
+            Text(
+                taskMetaLine(task),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueTransitionMarker() {
+    Surface(shape = RoundedCornerShape(999.dp), color = Color(0xFFE7DBCB)) {
+        Text(
+            text = "then queued",
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+    }
+}
+
+@Composable
+private fun WaitingPipelineTaskCard(task: QueueTask, position: Int) {
+    val accent = Color(0xFF3D7EA6)
+
+    Surface(
+        modifier = Modifier.widthIn(min = 230.dp, max = 300.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFFF6FBFE),
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, accent.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LegendChip(
+                    text = "Queue #$position",
+                    background = accent.copy(alpha = 0.18f),
+                    foreground = accent,
+                )
                 Text(
-                    processLine,
+                    task.statusAge(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                 )
             }
+
+            Text(
+                text = task.displayCommand,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            Text(
+                text = taskMetaLine(task),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
         }
     }
 }
 
 @Composable
 private fun StatusBadge(text: String, accent: Color) {
+    LegendChip(
+        text = text.uppercase(),
+        background = accent.copy(alpha = 0.16f),
+        foreground = accent,
+    )
+}
+
+@Composable
+private fun LegendChip(text: String, background: Color, foreground: Color) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(accent.copy(alpha = 0.16f))
+            .background(background)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
-            text = text.uppercase(),
-            color = accent,
+            text = text,
+            color = foreground,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
         )
@@ -494,6 +625,27 @@ private fun Banner(message: String, background: Color, foreground: Color) {
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             color = foreground,
         )
+    }
+}
+
+private fun laneDisplayName(scopeName: String, queueName: String): String {
+    val prefix = "$scopeName/"
+    return when {
+        queueName == scopeName -> "root lane"
+        queueName.startsWith(prefix) -> queueName.removePrefix(prefix)
+        else -> queueName
+    }
+}
+
+private fun taskMetaLine(task: QueueTask): String {
+    return buildString {
+        append("#${task.id}")
+        task.pid?.let {
+            append(" · server pid $it")
+        }
+        task.childPid?.let {
+            append(" · child pid $it")
+        }
     }
 }
 

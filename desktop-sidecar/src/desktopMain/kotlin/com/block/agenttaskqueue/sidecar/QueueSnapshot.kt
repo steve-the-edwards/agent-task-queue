@@ -51,8 +51,10 @@ data class QueueLane(
     val queueName: String,
     val tasks: List<QueueTask>,
 ) {
-    val runningCount: Int = tasks.count { it.status.equals("running", ignoreCase = true) }
-    val waitingCount: Int = tasks.count { it.status.equals("waiting", ignoreCase = true) }
+    val runningTasks: List<QueueTask> = tasks.filter { it.status.equals("running", ignoreCase = true) }
+    val waitingTasks: List<QueueTask> = tasks.filter { it.status.equals("waiting", ignoreCase = true) }
+    val runningCount: Int = runningTasks.size
+    val waitingCount: Int = waitingTasks.size
 }
 
 data class ScopeGroup(
@@ -76,12 +78,12 @@ data class QueueSnapshot(
     val waitingTasks: List<QueueTask> = tasks.filter { it.status.equals("waiting", ignoreCase = true) }
     val queueLanes: List<QueueLane> = tasks
         .groupBy { it.queueName }
-        .toSortedMap()
         .map { (queueName, queuedTasks) -> QueueLane(queueName, queuedTasks.sortedBy { it.id }) }
+        .sortedWith(queueLaneComparator)
     val scopeGroups: List<ScopeGroup> = queueLanes
         .groupBy { rootScope(it.queueName) }
-        .toSortedMap()
-        .map { (scopeName, lanes) -> ScopeGroup(scopeName, lanes) }
+        .map { (scopeName, lanes) -> ScopeGroup(scopeName, lanes.sortedWith(queueLaneComparator)) }
+        .sortedWith(scopeGroupComparator)
 
     companion object {
         fun empty(
@@ -130,6 +132,16 @@ fun formatRefreshTime(instant: Instant): String {
 }
 
 private fun rootScope(queueName: String): String = queueName.substringBefore('/')
+
+private val queueLaneComparator =
+    compareByDescending<QueueLane> { it.runningCount > 0 }
+        .thenByDescending { it.waitingCount }
+        .thenBy { it.queueName }
+
+private val scopeGroupComparator =
+    compareByDescending<ScopeGroup> { it.runningCount > 0 }
+        .thenByDescending { it.waitingCount }
+        .thenBy { it.scopeName }
 
 private fun relativeDuration(now: Instant, then: Instant): String {
     val elapsed = Duration.between(then, now).seconds.coerceAtLeast(0)
